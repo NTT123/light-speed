@@ -117,7 +117,6 @@ for batch in tqdm(ds.prefetch(1).as_numpy_iterator()):
         .float()
         .to(device, non_blocking=True)
     )
-    spec = torch.log(1e-3 + spec)
     spec_lengths = (
         torch.from_numpy(batch["spec_length"]).long().to(device, non_blocking=True)
     )
