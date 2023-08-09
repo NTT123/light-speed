@@ -51,7 +51,7 @@ ctx = (
 )
 # initialize a GradScaler. If enabled=False scaler is a no-op
 print(dtype, ptdtype, ctx)
-scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+scaler = torch.cuda.amp.GradScaler(enabled=(dtype == "float16"))
 
 
 train_ds = load_tfdata(FLAGS.tfdata, "train")
@@ -72,8 +72,8 @@ net_g = SynthesizerTrn(
     hps.data.filter_length // 2 + 1,
     hps.train.segment_size // hps.data.hop_length,
     **vars(hps.model),
-)
-net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm)
+).to(device)
+net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).to(device)
 optim_g = torch.optim.AdamW(
     net_g.parameters(),
     hps.train.learning_rate,
