@@ -196,12 +196,14 @@ for step, batch in tqdm(enumerate(ds.prefetch(1).as_numpy_iterator())):
     with ctx:
         y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
 
-    loss_mel = F.l1_loss(y_mel, y_hat_mel) * hps.train.c_mel
-    loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask) * hps.train.c_kl
+    loss_mel = F.l1_loss(y_mel, y_hat_mel)
+    loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask)
 
     loss_fm = feature_loss(fmap_r, fmap_g)
     loss_gen, losses_gen = generator_loss(y_d_hat_g)
-    loss_gen_all = loss_gen + loss_fm + loss_mel + loss_kl
+    loss_gen_all = (
+        loss_gen + loss_fm + loss_mel * hps.train.c_mel + loss_kl * hps.train.c_kl
+    )
 
     optim_g.zero_grad()
     scaler.scale(loss_gen_all).backward()
