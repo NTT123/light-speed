@@ -479,7 +479,6 @@ class SynthesizerTrn(nn.Module):
         #       logw_ = torch.log(w + 1e-6) * x_mask
         #       logw = self.dp(x, x_mask, g=g)
         #       l_length = torch.sum((logw - logw_)**2, [1,2]) / torch.sum(x_mask) # for averaging
-        print("m_p", m_p.shape)
 
         # expand prior
         m_p = torch.matmul(attn, m_p.transpose(1, 2)).transpose(1, 2)
