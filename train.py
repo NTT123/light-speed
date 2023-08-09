@@ -2,11 +2,13 @@ import torch  # isort:skip
 import json
 from argparse import ArgumentParser
 from contextlib import nullcontext
+from pathlib import Path
 from types import SimpleNamespace
 
 import tensorflow as tf
 import torch
 from torch.nn import functional as F
+from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
 
 import commons
@@ -20,6 +22,7 @@ tf.config.set_visible_devices([], "GPU")
 parser = ArgumentParser()
 parser.add_argument("--config", type=str, default="config.json")
 parser.add_argument("--tfdata", type=str, default="data/tfdata")
+parser.add_argument("--log-dir", type=Path, default="logs")
 parser.add_argument("--batch-size", type=int, default=16)
 parser.add_argument("--compile", action="store_true", default=False)
 parser.add_argument("--device", type=str, default="cuda")
@@ -67,6 +70,9 @@ with open(FLAGS.config, "rb") as f:
     hps = json.load(f, object_hook=lambda x: SimpleNamespace(**x))
 torch.manual_seed(hps.train.seed)
 
+train_writer = SummaryWriter(FLAGS.log_dir / "train", flush_secs=30)
+val_writer = SummaryWriter(FLAGS.log_dir / "val", flush_secs=30)
+
 net_g = SynthesizerTrn(
     256,
     hps.data.filter_length // 2 + 1,
@@ -106,7 +112,7 @@ net_g.train()
 net_d.train()
 
 
-for batch in tqdm(ds.prefetch(1).as_numpy_iterator()):
+for step, batch in tqdm(enumerate(ds.prefetch(1).as_numpy_iterator())):
     x = torch.from_numpy(batch["phone_idx"]).long().to(device, non_blocking=True)
     x_lengths = (
         torch.from_numpy(batch["phone_length"]).long().to(device, non_blocking=True)
@@ -204,4 +210,10 @@ for batch in tqdm(ds.prefetch(1).as_numpy_iterator()):
     scaler.step(optim_g)
     scaler.update()
 
-    print(loss_disc_all.item(), loss_gen_all.item())
+    train_writer.add_scalar("loss_disc_all", loss_disc_all.float(), global_step=step)
+    train_writer.add_scalar("loss_gen_all", loss_gen_all.float(), global_step=step)
+    train_writer.add_scalar("loss_gen", loss_gen.float(), global_step=step)
+    train_writer.add_scalar("loss_fm", loss_fm.float(), global_step=step)
+    train_writer.add_scalar("loss_mel", loss_mel.float(), global_step=step)
+    train_writer.add_scalar("loss_kl", loss_kl.float(), global_step=step)
+    train_writer.add_scalar("grad_scale", scaler.get_scale(), global_step=step)
