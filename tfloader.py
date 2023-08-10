@@ -38,7 +38,7 @@ def load_tfdata(root, split, batch_size, seed):
     ds = ds.bucket_by_sequence_length(
         lambda x: tf.shape(x["spec"])[0],
         bucket_boundaries=(200, 300, 400, 500, 600, 700, 800, 900, 1000),
-        bucket_batch_sizes=[batch_size] * 10,
+        bucket_batch_sizes=[batch_size] * 8 + [batch_size // 2] * 2,
         pad_to_bucket_boundary=False,
         drop_remainder=True,
     ).prefetch(1)
