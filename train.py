@@ -97,7 +97,7 @@ scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=hps.train.lr
 net_g.train()
 net_d.train()
 
-ds, num_batch_per_epoch = load_tfdata(FLAGS.tfdata, "train", FLAGS.batch_size, epoch)
+ds, num_batch_per_epoch = load_tfdata(FLAGS.tfdata, "train", FLAGS.batch_size)
 step = 0
 for batch in tqdm(ds.as_numpy_iterator()):
     step = step + 1

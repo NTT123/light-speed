@@ -2,10 +2,10 @@ import torch  # isort:skip
 import tensorflow as tf
 
 
-def load_tfdata(root, split, batch_size, seed):
+def load_tfdata(root, split, batch_size):
     files = tf.data.Dataset.list_files(f"{root}/{split}/part_*.tfrecords")
     num_batch_per_epoch = len(files) // batch_size
-    files = files.repeat().shuffle(len(files), seed)
+    files = files.repeat().shuffle(len(files))
 
     feature_description = {
         "phone_idx": tf.io.FixedLenFeature([], tf.string),
