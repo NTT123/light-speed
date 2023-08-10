@@ -65,8 +65,8 @@ with open(FLAGS.config, "rb") as f:
     hps = json.load(f, object_hook=lambda x: SimpleNamespace(**x))
 torch.manual_seed(hps.train.seed)
 
-train_writer = SummaryWriter(FLAGS.log_dir / "train", flush_secs=30)
-test_writer = SummaryWriter(FLAGS.log_dir / "test", flush_secs=30)
+train_writer = SummaryWriter(FLAGS.log_dir / "train", flush_secs=300)
+test_writer = SummaryWriter(FLAGS.log_dir / "test", flush_secs=300)
 
 net_g = SynthesizerTrn(
     256,
