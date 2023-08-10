@@ -57,7 +57,8 @@ ctx = (
 )
 # initialize a GradScaler. If enabled=False scaler is a no-op
 print(dtype, ptdtype, ctx)
-scaler = torch.cuda.amp.GradScaler(enabled=(dtype == "float16"))
+d_scaler = torch.cuda.amp.GradScaler(enabled=(dtype == "float16"))
+g_scaler = torch.cuda.amp.GradScaler(enabled=(dtype == "float16"))
 FLAGS.ckpt_dir.mkdir(exist_ok=True, parents=True)
 
 with open(FLAGS.config, "rb") as f:
@@ -108,7 +109,8 @@ if len(ckpts) > 0:
     scheduler_g.load_state_dict(ckpt["scheduler_g"])
     scheduler_d.load_state_dict(ckpt["scheduler_d"])
     step = ckpt["step"]
-    scaler.load_state_dict(ckpt["scaler"])
+    d_scaler.load_state_dict(ckpt["d_scaler"])
+    g_scaler.load_state_dict(ckpt["g_scaler"])
     _epoch = ckpt.get("epoch", 0)
 else:
     step = 0
@@ -253,10 +255,11 @@ for epoch in range(_epoch + 1, 100_000):
         )
         loss_disc_all = loss_disc
         optim_d.zero_grad()
-        scaler.scale(loss_disc_all).backward()
-        scaler.unscale_(optim_d)
+        d_scaler.scale(loss_disc_all).backward()
+        d_scaler.unscale_(optim_d)
         grad_norm_d = commons.clip_grad_value_(net_d.parameters(), None)
-        scaler.step(optim_d)
+        d_scaler.step(optim_d)
+        d_scaler.update()
 
         with ctx:
             y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
@@ -271,11 +274,11 @@ for epoch in range(_epoch + 1, 100_000):
         )
 
         optim_g.zero_grad()
-        scaler.scale(loss_gen_all).backward()
-        scaler.unscale_(optim_g)
+        g_scaler.scale(loss_gen_all).backward()
+        g_scaler.unscale_(optim_g)
         grad_norm_g = commons.clip_grad_value_(net_g.parameters(), None)
-        scaler.step(optim_g)
-        scaler.update()
+        g_scaler.step(optim_g)
+        g_scaler.update()
 
         train_writer.add_scalar(
             "loss_disc_all", loss_disc_all.float(), global_step=step
@@ -285,7 +288,8 @@ for epoch in range(_epoch + 1, 100_000):
         train_writer.add_scalar("loss_fm", loss_fm.float(), global_step=step)
         train_writer.add_scalar("loss_mel", loss_mel.float(), global_step=step)
         train_writer.add_scalar("loss_kl", loss_kl.float(), global_step=step)
-        train_writer.add_scalar("grad_scale", scaler.get_scale(), global_step=step)
+        train_writer.add_scalar("d_grad_scale", d_scaler.get_scale(), global_step=step)
+        train_writer.add_scalar("g_grad_scale", g_scaler.get_scale(), global_step=step)
         train_writer.add_scalar("grad_norm_d", grad_norm_d, global_step=step)
         train_writer.add_scalar("grad_norm_g", grad_norm_g, global_step=step)
 
@@ -297,7 +301,8 @@ for epoch in range(_epoch + 1, 100_000):
                     "epoch": epoch,
                     "net_g": net_g.state_dict(),
                     "net_d": net_d.state_dict(),
-                    "scaler": scaler.state_dict(),
+                    "d_scaler": d_scaler.state_dict(),
+                    "g_scaler": g_scaler.state_dict(),
                     "optim_d": optim_d.state_dict(),
                     "optim_g": optim_g.state_dict(),
                     "scheduler_g": scheduler_g.state_dict(),
