@@ -384,7 +384,6 @@ class SynthesizerTrn(nn.Module):
         use_sdp=True,
         **kwargs
     ):
-
         super().__init__()
         self.n_vocab = n_vocab
         self.spec_channels = spec_channels
@@ -449,7 +448,6 @@ class SynthesizerTrn(nn.Module):
             self.emb_g = nn.Embedding(n_speakers, gin_channels)
 
     def forward(self, x, x_lengths, attn, y, y_lengths, sid=None):
-
         x, m_p, logs_p, x_mask = self.enc_p(x, x_lengths)
         if self.n_speakers > 0:
             g = self.emb_g(sid).unsqueeze(-1)  # [b, h, 1]

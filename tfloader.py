@@ -2,9 +2,9 @@ import torch  # isort:skip
 import tensorflow as tf
 
 
-def load_tfdata(root, split):
+def load_tfdata(root, split, batch_size, seed):
     files = tf.data.Dataset.list_files(f"{root}/{split}/part_*.tfrecords")
-    files = files.repeat().shuffle(len(files))
+    files = files.shuffle(len(files), seed)
 
     feature_description = {
         "phone_idx": tf.io.FixedLenFeature([], tf.string),
@@ -34,7 +34,13 @@ def load_tfdata(root, split):
             "spec_length": tf.shape(spec)[0],
         }
 
-    ds = tf.data.TFRecordDataset(files, num_parallel_reads=4).map(
-        parse_tfrecord, num_parallel_calls=4
+    ds = tf.data.TFRecordDataset(files, num_parallel_reads=32).map(
+        parse_tfrecord, num_parallel_calls=32
     )
+    ds = ds.bucket_by_sequence_length(
+        lambda x: tf.shape(x["spec"])[0],
+        bucket_boundaries=(200, 300, 400, 500, 600, 700, 800, 900, 1000),
+        bucket_batch_sizes=[batch_size] * 10,
+        pad_to_bucket_boundary=False,
+    ).prefetch(1)
     return ds

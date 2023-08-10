@@ -182,7 +182,7 @@ class MultiHeadAttention(nn.Module):
         self.block_length = block_length
         self.proximal_bias = proximal_bias
         self.proximal_init = proximal_init
-        self.attn = None
+        # self.attn = None
 
         self.k_channels = channels // n_heads
         self.conv_q = nn.Conv1d(channels, channels, 1)
@@ -216,7 +216,7 @@ class MultiHeadAttention(nn.Module):
         k = self.conv_k(c)
         v = self.conv_v(c)
 
-        x, self.attn = self.attention(q, k, v, mask=attn_mask)
+        x, _ = self.attention(q, k, v, mask=attn_mask)
 
         x = self.conv_o(x)
         return x
@@ -334,12 +334,12 @@ class MultiHeadAttention(nn.Module):
         x: [b, h, l, l]
         ret: [b, h, l, 2*l-1]
         """
-        batch, heads, length, _ = x.size()
+        batch, heads, length, _ = x.shape
         # padd along column
         x = F.pad(
             x, commons.convert_pad_shape([[0, 0], [0, 0], [0, 0], [0, length - 1]])
         )
-        x_flat = x.view([batch, heads, length**2 + length * (length - 1)])
+        x_flat = x.view([batch, heads, length * length + length * (length - 1)])
         # add 0's in the beginning that will skew the elements after reshape
         x_flat = F.pad(x_flat, commons.convert_pad_shape([[0, 0], [0, 0], [length, 0]]))
         x_final = x_flat.view([batch, heads, length, 2 * length])[:, :, :, 1:]

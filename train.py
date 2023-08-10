@@ -23,10 +23,12 @@ parser = ArgumentParser()
 parser.add_argument("--config", type=str, default="config.json")
 parser.add_argument("--tfdata", type=str, default="data/tfdata")
 parser.add_argument("--log-dir", type=Path, default="logs")
+parser.add_argument("--ckpt-dir", type=Path, default="logs")
 parser.add_argument("--batch-size", type=int, default=16)
 parser.add_argument("--compile", action="store_true", default=False)
 parser.add_argument("--device", type=str, default="cuda")
 parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--ckpt-interval", type=int, default=5_000)
 FLAGS = parser.parse_args()
 
 # credit: https://github.com/karpathy/nanoGPT/blob/master/train.py#L72-L112
@@ -55,16 +57,7 @@ ctx = (
 # initialize a GradScaler. If enabled=False scaler is a no-op
 print(dtype, ptdtype, ctx)
 scaler = torch.cuda.amp.GradScaler(enabled=(dtype == "float16"))
-
-
-train_ds = load_tfdata(FLAGS.tfdata, "train")
-ds = train_ds.bucket_by_sequence_length(
-    lambda x: tf.shape(x["spec"])[0],
-    bucket_boundaries=(32, 300, 400, 500, 600, 700, 800, 900, 1000),
-    bucket_batch_sizes=[FLAGS.batch_size] * 10,
-    pad_to_bucket_boundary=False,
-)
-
+FLAGS.ckpt_dir.mkdir(exist_ok=True, parents=True)
 
 with open(FLAGS.config, "rb") as f:
     hps = json.load(f, object_hook=lambda x: SimpleNamespace(**x))
@@ -94,7 +87,7 @@ optim_d = torch.optim.AdamW(
 )
 
 if compile:
-    net_g = torch.compile(net_g)
+    # net_g = torch.compile(net_g)
     net_d = torch.compile(net_d)
 
 epoch_str = 1
@@ -111,111 +104,147 @@ scheduler_d = torch.optim.lr_scheduler.ExponentialLR(
 net_g.train()
 net_d.train()
 
+step = 0
+for epoch in range(1000_000):
+    print(f"Epoch: {epoch}")
+    ds = load_tfdata(FLAGS.tfdata, "train", FLAGS.batch_size, epoch)
+    for batch in tqdm(ds.as_numpy_iterator(), position=0, leave=True):
+        step = step + 1
+        x = torch.from_numpy(batch["phone_idx"]).to(device, non_blocking=True).long()
+        x_lengths = (
+            torch.from_numpy(batch["phone_length"]).to(device, non_blocking=True).long()
+        )
+        spec = (
+            torch.from_numpy(batch["spec"])
+            .to(device, non_blocking=True)
+            .swapaxes(-1, -2)
+            .float()
+        )
+        spec_lengths = (
+            torch.from_numpy(batch["spec_length"]).to(device, non_blocking=True).long()
+        )
+        y = (
+            torch.from_numpy(batch["wav"])
+            .to(device, non_blocking=True)
+            .float()[:, None, :]
+        )
+        y_lengths = (
+            torch.from_numpy(batch["wav_length"]).to(device, non_blocking=True).long()
+        )
+        duration = (
+            torch.from_numpy(batch["phone_duration"])
+            .to(device, non_blocking=True)
+            .float()
+        )
+        end_time = torch.cumsum(duration, dim=-1)
+        start_time = end_time - duration
+        start_frame = (
+            start_time * hps.data.sampling_rate / hps.data.hop_length / 1000
+        ).int()
+        end_frame = (
+            end_time * hps.data.sampling_rate / hps.data.hop_length / 1000
+        ).int()
+        pos = torch.arange(0, spec.shape[-1], device=spec.device)
+        attn = torch.logical_and(
+            pos[None, :, None] >= start_frame[:, None, :],
+            pos[None, :, None] < end_frame[:, None, :],
+        )
 
-for step, batch in tqdm(enumerate(ds.prefetch(1).as_numpy_iterator())):
-    x = torch.from_numpy(batch["phone_idx"]).long().to(device, non_blocking=True)
-    x_lengths = (
-        torch.from_numpy(batch["phone_length"]).long().to(device, non_blocking=True)
-    )
-    spec = (
-        torch.from_numpy(batch["spec"])
-        .swapaxes(-1, -2)
-        .float()
-        .to(device, non_blocking=True)
-    )
-    spec_lengths = (
-        torch.from_numpy(batch["spec_length"]).long().to(device, non_blocking=True)
-    )
-    y = torch.from_numpy(batch["wav"]).float()[:, None, :].to(device, non_blocking=True)
-    y_lengths = (
-        torch.from_numpy(batch["wav_length"]).long().to(device, non_blocking=True)
-    )
-    duration = (
-        torch.from_numpy(batch["phone_duration"]).float().to(device, non_blocking=True)
-    )
-    end_time = torch.cumsum(duration, dim=-1)
-    start_time = end_time - duration
-    start_frame = (
-        start_time * hps.data.sampling_rate / hps.data.hop_length / 1000
-    ).int()
-    end_frame = (end_time * hps.data.sampling_rate / hps.data.hop_length / 1000).int()
-    pos = torch.arange(0, spec.shape[-1], device=spec.device)
-    attn = torch.logical_and(
-        pos[None, :, None] >= start_frame[:, None, :],
-        pos[None, :, None] < end_frame[:, None, :],
-    )
+        with ctx:
+            (
+                y_hat,
+                l_length,
+                attn,
+                ids_slice,
+                x_mask,
+                z_mask,
+                (z, z_p, m_p, logs_p, m_q, logs_q),
+            ) = net_g(x, x_lengths, attn.float(), spec, spec_lengths)
 
-    with ctx:
-        (
-            y_hat,
-            l_length,
-            attn,
-            ids_slice,
-            x_mask,
-            z_mask,
-            (z, z_p, m_p, logs_p, m_q, logs_q),
-        ) = net_g(x, x_lengths, attn.float(), spec, spec_lengths)
+        mel = spec_to_mel_torch(
+            spec,
+            hps.data.filter_length,
+            hps.data.n_mel_channels,
+            hps.data.sampling_rate,
+            hps.data.mel_fmin,
+            hps.data.mel_fmax,
+        )
+        y_mel = commons.slice_segments(
+            mel, ids_slice, hps.train.segment_size // hps.data.hop_length
+        )
+        y_hat_mel = mel_spectrogram_torch(
+            y_hat.float().squeeze(1),
+            hps.data.filter_length,
+            hps.data.n_mel_channels,
+            hps.data.sampling_rate,
+            hps.data.hop_length,
+            hps.data.win_length,
+            hps.data.mel_fmin,
+            hps.data.mel_fmax,
+        )
 
-    mel = spec_to_mel_torch(
-        spec,
-        hps.data.filter_length,
-        hps.data.n_mel_channels,
-        hps.data.sampling_rate,
-        hps.data.mel_fmin,
-        hps.data.mel_fmax,
-    )
-    y_mel = commons.slice_segments(
-        mel, ids_slice, hps.train.segment_size // hps.data.hop_length
-    )
-    y_hat_mel = mel_spectrogram_torch(
-        y_hat.squeeze(1),
-        hps.data.filter_length,
-        hps.data.n_mel_channels,
-        hps.data.sampling_rate,
-        hps.data.hop_length,
-        hps.data.win_length,
-        hps.data.mel_fmin,
-        hps.data.mel_fmax,
-    )
+        y = commons.slice_segments(
+            y, ids_slice * hps.data.hop_length, hps.train.segment_size
+        )  # slice
 
-    y = commons.slice_segments(
-        y, ids_slice * hps.data.hop_length, hps.train.segment_size
-    )  # slice
+        with ctx:
+            # Discriminator
+            y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
+        loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(
+            y_d_hat_r, y_d_hat_g
+        )
+        loss_disc_all = loss_disc
+        optim_d.zero_grad()
+        scaler.scale(loss_disc_all).backward()
+        scaler.unscale_(optim_d)
+        grad_norm_d = commons.clip_grad_value_(net_d.parameters(), None)
+        scaler.step(optim_d)
 
-    with ctx:
-        # Discriminator
-        y_d_hat_r, y_d_hat_g, _, _ = net_d(y, y_hat.detach())
-    loss_disc, losses_disc_r, losses_disc_g = discriminator_loss(y_d_hat_r, y_d_hat_g)
-    loss_disc_all = loss_disc
-    optim_d.zero_grad()
-    scaler.scale(loss_disc_all).backward()
-    scaler.unscale_(optim_d)
-    grad_norm_d = commons.clip_grad_value_(net_d.parameters(), None)
-    scaler.step(optim_d)
+        with ctx:
+            y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
 
-    with ctx:
-        y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
+        loss_mel = F.l1_loss(y_mel, y_hat_mel)
+        loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask)
 
-    loss_mel = F.l1_loss(y_mel, y_hat_mel)
-    loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask)
+        loss_fm = feature_loss(fmap_r, fmap_g)
+        loss_gen, losses_gen = generator_loss(y_d_hat_g)
+        loss_gen_all = (
+            loss_gen + loss_fm + loss_mel * hps.train.c_mel + loss_kl * hps.train.c_kl
+        )
 
-    loss_fm = feature_loss(fmap_r, fmap_g)
-    loss_gen, losses_gen = generator_loss(y_d_hat_g)
-    loss_gen_all = (
-        loss_gen + loss_fm + loss_mel * hps.train.c_mel + loss_kl * hps.train.c_kl
-    )
+        optim_g.zero_grad()
+        scaler.scale(loss_gen_all).backward()
+        scaler.unscale_(optim_g)
+        grad_norm_g = commons.clip_grad_value_(net_g.parameters(), None)
+        scaler.step(optim_g)
+        scaler.update()
 
-    optim_g.zero_grad()
-    scaler.scale(loss_gen_all).backward()
-    scaler.unscale_(optim_g)
-    grad_norm_g = commons.clip_grad_value_(net_g.parameters(), None)
-    scaler.step(optim_g)
-    scaler.update()
-
-    train_writer.add_scalar("loss_disc_all", loss_disc_all.float(), global_step=step)
-    train_writer.add_scalar("loss_gen_all", loss_gen_all.float(), global_step=step)
-    train_writer.add_scalar("loss_gen", loss_gen.float(), global_step=step)
-    train_writer.add_scalar("loss_fm", loss_fm.float(), global_step=step)
-    train_writer.add_scalar("loss_mel", loss_mel.float(), global_step=step)
-    train_writer.add_scalar("loss_kl", loss_kl.float(), global_step=step)
-    train_writer.add_scalar("grad_scale", scaler.get_scale(), global_step=step)
+        train_writer.add_scalar(
+            "loss_disc_all", loss_disc_all.float(), global_step=step
+        )
+        train_writer.add_scalar("loss_gen_all", loss_gen_all.float(), global_step=step)
+        train_writer.add_scalar("loss_gen", loss_gen.float(), global_step=step)
+        train_writer.add_scalar("loss_fm", loss_fm.float(), global_step=step)
+        train_writer.add_scalar("loss_mel", loss_mel.float(), global_step=step)
+        train_writer.add_scalar("loss_kl", loss_kl.float(), global_step=step)
+        train_writer.add_scalar("grad_scale", scaler.get_scale(), global_step=step)
+        train_writer.add_scalar("grad_norm_d", grad_norm_d, global_step=step)
+        train_writer.add_scalar("grad_norm_g", grad_norm_g, global_step=step)
+        if step % FLAGS.ckpt_interval == 0:
+            torch.save(
+                {
+                    "step": step,
+                    "net_g": net_g.state_dict(),
+                    "net_d": net_d.state_dict(),
+                    "scaler": scaler.state_dict(),
+                    "optim_d": optim_d.state_dict(),
+                    "optim_g": optim_g.state_dict(),
+                    "scheduler_g": scheduler_g.state_dict(),
+                    "scheduler_d": scheduler_d.state_dict(),
+                },
+                FLAGS.ckpt_dir / f"ckpt_{step:08d}.pth",
+            )
+    lr = optim_g.param_groups[0]["lr"]
+    train_writer.add_scalar("lr", lr, global_step=step)
+    scheduler_g.step()
+    scheduler_d.step()
