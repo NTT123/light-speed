@@ -4,7 +4,8 @@ import tensorflow as tf
 
 def load_tfdata(root, split, batch_size, seed):
     files = tf.data.Dataset.list_files(f"{root}/{split}/part_*.tfrecords")
-    files = files.shuffle(len(files), seed)
+    num_batch_per_epoch = len(files) // batch_size
+    files = files.repeat().shuffle(len(files), seed)
 
     feature_description = {
         "phone_idx": tf.io.FixedLenFeature([], tf.string),
@@ -43,4 +44,4 @@ def load_tfdata(root, split, batch_size, seed):
         bucket_batch_sizes=[batch_size] * 10,
         pad_to_bucket_boundary=False,
     ).prefetch(1)
-    return ds
+    return ds, num_batch_per_epoch
