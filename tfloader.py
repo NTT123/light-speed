@@ -31,22 +31,18 @@ def parse_tfrecord(r):
 
 def load_tfdata(root, split, batch_size, seed, rank=0, world_size=1):
     files = tf.data.Dataset.list_files(f"{root}/{split}/part_*.tfrecords")
-    # make sure each worker has the same number of files
-    length = len(files) // world_size * world_size
-    files = files.take(length)
     files = files.shard(world_size, rank)
-    # shuffle files
     files = files.shuffle(len(files), seed=seed)
-    ds = tf.data.TFRecordDataset(files, num_parallel_reads=4).map(
-        parse_tfrecord,
-        num_parallel_calls=4,
-        deterministic=True,
+    return (
+        tf.data.TFRecordDataset(files, num_parallel_reads=4)
+        .map(parse_tfrecord, num_parallel_calls=4, deterministic=True)
+        .shuffle(buffer_size=batch_size * 32, seed=seed)
+        .bucket_by_sequence_length(
+            lambda x: tf.shape(x["spec"])[0],
+            bucket_boundaries=(200, 300, 400, 500, 600, 700, 800),
+            bucket_batch_sizes=[batch_size] * 8,
+            pad_to_bucket_boundary=False,
+            drop_remainder=True,
+        )
+        .prefetch(1)
     )
-    ds = ds.bucket_by_sequence_length(
-        lambda x: tf.shape(x["spec"])[0],
-        bucket_boundaries=(200, 300, 400, 500, 600, 700, 800),
-        bucket_batch_sizes=[batch_size] * 8,
-        pad_to_bucket_boundary=False,
-        drop_remainder=True,
-    ).prefetch(1)
-    return ds
