@@ -73,7 +73,7 @@ FLAGS.ckpt_dir.mkdir(exist_ok=True, parents=True)
 
 with open(FLAGS.config, "rb") as f:
     hps = json.load(f, object_hook=lambda x: SimpleNamespace(**x))
-torch.manual_seed(hps.train.seed)
+torch.manual_seed(FLAGS.seed)
 
 train_writer = SummaryWriter(FLAGS.log_dir / "train", flush_secs=300)
 test_writer = SummaryWriter(FLAGS.log_dir / "test", flush_secs=300)
