@@ -232,8 +232,8 @@ for epoch in range(_epoch + 1, 100_000):
         "train",
         FLAGS.batch_size,
         seed=epoch,
-        RANK=RANK,
-        WORLD_SIZE=WORLD_SIZE,
+        rank=RANK,
+        world_size=WORLD_SIZE,
     ).as_numpy_iterator()
     ds = tqdm(ds) if RANK == 0 else ds
     for batch in ds:
