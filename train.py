@@ -1,5 +1,6 @@
 import torch  # isort:skip
 import json
+import os
 from argparse import ArgumentParser
 from contextlib import nullcontext
 from pathlib import Path
@@ -17,6 +18,15 @@ from losses import discriminator_loss, feature_loss, generator_loss, kl_loss
 from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 from models import MultiPeriodDiscriminator, SynthesizerTrn
 from tfloader import load_tfdata
+
+if "RANK" in os.environ:
+    torch.distributed.init_process_group(backend="nccl")
+    RANK = int(os.environ.get("RANK", "0"))
+    WORLD_SIZE = int(os.environ.get("LOCAL_WORLD_SIZE", "1"))
+    torch.cuda.set_device(RANK)
+else:
+    RANK = 0
+    WORLD_SIZE = 1
 
 tf.config.set_visible_devices([], "GPU")
 
@@ -75,6 +85,16 @@ net_g = SynthesizerTrn(
     **vars(hps.model),
 ).to(device)
 net_d = MultiPeriodDiscriminator(hps.model.use_spectral_norm).to(device)
+
+if WORLD_SIZE > 1:
+    net_g = torch.nn.parallel.DistributedDataParallel(
+        net_g, device_ids=[RANK], output_device=RANK
+    )
+    net_d = torch.nn.parallel.DistributedDataParallel(
+        net_d, device_ids=[RANK], output_device=RANK
+    )
+
+
 optim_g = torch.optim.AdamW(
     net_g.parameters(),
     hps.train.learning_rate,
@@ -112,6 +132,7 @@ if len(ckpts) > 0:
     d_scaler.load_state_dict(ckpt["d_scaler"])
     g_scaler.load_state_dict(ckpt["g_scaler"])
     _epoch = ckpt.get("epoch", 0)
+    del ckpt
 else:
     step = 0
     _epoch = 0
@@ -193,20 +214,29 @@ def evaluate(step):
         )
     gen_mel = utils.plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy())
     gt_mel = utils.plot_spectrogram_to_numpy(mel[0].cpu().numpy())
-    test_writer.add_audio(
-        "gt/audio", y[0, :, : y_lengths[0]], step, hps.data.sampling_rate
-    )
-    test_writer.add_audio(
-        "gen/audio", y_hat[0, :, : y_hat_lengths[0]], step, hps.data.sampling_rate
-    )
-    test_writer.add_image("mel", gen_mel, step, dataformats="HWC")
-    test_writer.add_image("mel_gt", gt_mel, step, dataformats="HWC")
+    if RANK == 0:
+        test_writer.add_audio(
+            "gt/audio", y[0, :, : y_lengths[0]], step, hps.data.sampling_rate
+        )
+        test_writer.add_audio(
+            "gen/audio", y_hat[0, :, : y_hat_lengths[0]], step, hps.data.sampling_rate
+        )
+        test_writer.add_image("mel", gen_mel, step, dataformats="HWC")
+        test_writer.add_image("mel_gt", gt_mel, step, dataformats="HWC")
     net_g.train()
 
 
 for epoch in range(_epoch + 1, 100_000):
-    ds = load_tfdata(FLAGS.tfdata, "train", FLAGS.batch_size, epoch)
-    for batch in tqdm(ds.as_numpy_iterator()):
+    ds = load_tfdata(
+        FLAGS.tfdata,
+        "train",
+        FLAGS.batch_size,
+        seed=epoch,
+        RANK=RANK,
+        WORLD_SIZE=WORLD_SIZE,
+    ).as_numpy_iterator()
+    ds = tqdm(ds) if RANK == 0 else ds
+    for batch in ds:
         step = step + 1
         x, x_lengths, spec, spec_lengths, y, y_lengths, attn = prepare_batch(batch)
         with ctx:
@@ -279,37 +309,45 @@ for epoch in range(_epoch + 1, 100_000):
         g_scaler.step(optim_g)
         g_scaler.update()
 
-        train_writer.add_scalar(
-            "loss_disc_all", loss_disc_all.float(), global_step=step
-        )
-        train_writer.add_scalar("loss_gen_all", loss_gen_all.float(), global_step=step)
-        train_writer.add_scalar("loss_gen", loss_gen.float(), global_step=step)
-        train_writer.add_scalar("loss_fm", loss_fm.float(), global_step=step)
-        train_writer.add_scalar("loss_mel", loss_mel.float(), global_step=step)
-        train_writer.add_scalar("loss_kl", loss_kl.float(), global_step=step)
-        train_writer.add_scalar("d_grad_scale", d_scaler.get_scale(), global_step=step)
-        train_writer.add_scalar("g_grad_scale", g_scaler.get_scale(), global_step=step)
-        train_writer.add_scalar("grad_norm_d", grad_norm_d, global_step=step)
-        train_writer.add_scalar("grad_norm_g", grad_norm_g, global_step=step)
-
-        if step % FLAGS.ckpt_interval == 0:
-            evaluate(step)
-            torch.save(
-                {
-                    "step": step,
-                    "epoch": epoch,
-                    "net_g": net_g.state_dict(),
-                    "net_d": net_d.state_dict(),
-                    "d_scaler": d_scaler.state_dict(),
-                    "g_scaler": g_scaler.state_dict(),
-                    "optim_d": optim_d.state_dict(),
-                    "optim_g": optim_g.state_dict(),
-                    "scheduler_g": scheduler_g.state_dict(),
-                    "scheduler_d": scheduler_d.state_dict(),
-                },
-                FLAGS.ckpt_dir / f"ckpt_{step:08d}.pth",
+        if RANK == 0:
+            train_writer.add_scalar(
+                "loss_disc_all", loss_disc_all.float(), global_step=step
             )
-    lr = optim_g.param_groups[0]["lr"]
-    train_writer.add_scalar("lr", lr, global_step=step)
+            train_writer.add_scalar(
+                "loss_gen_all", loss_gen_all.float(), global_step=step
+            )
+            train_writer.add_scalar("loss_gen", loss_gen.float(), global_step=step)
+            train_writer.add_scalar("loss_fm", loss_fm.float(), global_step=step)
+            train_writer.add_scalar("loss_mel", loss_mel.float(), global_step=step)
+            train_writer.add_scalar("loss_kl", loss_kl.float(), global_step=step)
+            train_writer.add_scalar(
+                "d_grad_scale", d_scaler.get_scale(), global_step=step
+            )
+            train_writer.add_scalar(
+                "g_grad_scale", g_scaler.get_scale(), global_step=step
+            )
+            train_writer.add_scalar("grad_norm_d", grad_norm_d, global_step=step)
+            train_writer.add_scalar("grad_norm_g", grad_norm_g, global_step=step)
+
+            if step % FLAGS.ckpt_interval == 0:
+                evaluate(step)
+                torch.save(
+                    {
+                        "step": step,
+                        "epoch": epoch,
+                        "net_g": net_g.state_dict(),
+                        "net_d": net_d.state_dict(),
+                        "d_scaler": d_scaler.state_dict(),
+                        "g_scaler": g_scaler.state_dict(),
+                        "optim_d": optim_d.state_dict(),
+                        "optim_g": optim_g.state_dict(),
+                        "scheduler_g": scheduler_g.state_dict(),
+                        "scheduler_d": scheduler_d.state_dict(),
+                    },
+                    FLAGS.ckpt_dir / f"ckpt_{step:08d}.pth",
+                )
+    if RANK == 0:
+        lr = optim_g.param_groups[0]["lr"]
+        train_writer.add_scalar("lr", lr, global_step=step)
     scheduler_g.step()
     scheduler_d.step()
