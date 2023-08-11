@@ -191,7 +191,9 @@ def evaluate(step):
         y = y[:1]
         y_lengths = y_lengths[:1]
         attn = attn[:1]
-        y_hat, attn, *_ = net_g.infer(x, x_lengths, spec_lengths, attn, max_len=1000)
+        y_hat, attn, *_ = net_g.infer(
+            x, x_lengths, spec_lengths, attn, max_len=1000, noise_scale=0.667
+        )
         y_hat_lengths = y_lengths
 
         mel = spec_to_mel_torch(
