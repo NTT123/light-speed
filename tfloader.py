@@ -31,6 +31,15 @@ def parse_tfrecord(r):
 
 def load_tfdata(root, split, batch_size, seed, rank=0, world_size=1):
     files = tf.data.Dataset.list_files(f"{root}/{split}/part_*.tfrecords")
+    if split == "test":
+        return (
+            tf.data.TFRecordDataset(files)
+            .map(parse_tfrecord)
+            .batch(batch_size)
+            .prefetch(1)
+        )
+
+    # train split
     files = files.shard(world_size, rank)
     files = files.shuffle(len(files), seed=seed)
     return (
