@@ -21,6 +21,22 @@ from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 from models import MultiPeriodDiscriminator, SynthesizerTrn
 from tfloader import load_tfdata
 
+#### COMMAND LINE ARGUMENTS ####
+parser = ArgumentParser()
+parser.add_argument("--config", type=str, default="config.json")
+parser.add_argument("--tfdata", type=str, default="data/tfdata")
+parser.add_argument("--log-dir", type=Path, default="logs")
+parser.add_argument("--ckpt-dir", type=Path, default="ckpts")
+parser.add_argument("--batch-size", type=int, default=16)
+parser.add_argument("--compile", action="store_true", default=False)
+parser.add_argument("--device", type=str, default="cuda")
+parser.add_argument("--seed", type=int, default=42)
+parser.add_argument("--ckpt-interval", type=int, default=5_000)
+FLAGS = parser.parse_args()
+with open(FLAGS.config, "rb") as f:
+    hps = json.load(f, object_hook=lambda x: SimpleNamespace(**x))
+
+#### INIT DISTRIBUTED TRAINING ####
 if "RANK" in os.environ:
     torch.distributed.init_process_group(backend="nccl")
     RANK = int(os.environ.get("RANK", "0"))
@@ -33,21 +49,10 @@ else:
 tf.config.set_visible_devices([], "GPU")
 matplotlib.use("Agg")
 
-
-parser = ArgumentParser()
-parser.add_argument("--config", type=str, default="config.json")
-parser.add_argument("--tfdata", type=str, default="data/tfdata")
-parser.add_argument("--log-dir", type=Path, default="logs")
-parser.add_argument("--ckpt-dir", type=Path, default="ckpts")
-parser.add_argument("--batch-size", type=int, default=16)
-parser.add_argument("--compile", action="store_true", default=False)
-parser.add_argument("--device", type=str, default="cuda")
-parser.add_argument("--seed", type=int, default=42)
-parser.add_argument("--ckpt-interval", type=int, default=5_000)
-FLAGS = parser.parse_args()
-
+#### INIT CUDA & MIXED PRECISION ####
 # credit: https://github.com/karpathy/nanoGPT/blob/master/train.py#L72-L112
 torch.backends.cudnn.benchmark = True
+torch.manual_seed(FLAGS.seed)
 torch.cuda.manual_seed(FLAGS.seed)
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -73,16 +78,14 @@ ctx = (
 print(dtype, ptdtype, ctx)
 d_scaler = torch.cuda.amp.GradScaler(enabled=(dtype == "float16"))
 g_scaler = torch.cuda.amp.GradScaler(enabled=(dtype == "float16"))
+
+#### INIT LOGGING ####
 FLAGS.ckpt_dir.mkdir(exist_ok=True, parents=True)
-
-with open(FLAGS.config, "rb") as f:
-    hps = json.load(f, object_hook=lambda x: SimpleNamespace(**x))
-torch.manual_seed(FLAGS.seed)
-
 if RANK == 0:
     train_writer = SummaryWriter(FLAGS.log_dir / "train", flush_secs=300)
     test_writer = SummaryWriter(FLAGS.log_dir / "test", flush_secs=300)
 
+#### INIT MODEL ####
 net_g = SynthesizerTrn(
     256,
     hps.data.filter_length // 2 + 1,
@@ -99,7 +102,11 @@ if WORLD_SIZE > 1:
         net_d, device_ids=[RANK], output_device=RANK
     )
 
+if compile:
+    # net_g = torch.compile(net_g)
+    net_d = torch.compile(net_d)
 
+#### INIT OPTIMIZERS ####
 optim_g = torch.optim.AdamW(
     net_g.parameters(),
     hps.train.learning_rate,
@@ -116,11 +123,8 @@ optim_d = torch.optim.AdamW(
 scheduler_g = torch.optim.lr_scheduler.ExponentialLR(optim_g, gamma=hps.train.lr_decay)
 scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=hps.train.lr_decay)
 
-if compile:
-    # net_g = torch.compile(net_g)
-    net_d = torch.compile(net_d)
 
-
+#### LOAD CHECKPOINT ####
 ckpts = sorted(FLAGS.ckpt_dir.glob("ckpt_*.pth"))
 if len(ckpts) > 0:
     # last ckpt
@@ -142,6 +146,8 @@ else:
     step = -1
     _epoch = 0
 
+
+#### TRAINING & EVALUATION ####
 
 net_g.train()
 net_d.train()
@@ -249,6 +255,7 @@ def evaluate(step):
     net_g.train()
 
 
+# TRAINING LOOP ...
 for epoch in range(_epoch + 1, 100_000):
     ds = load_tfdata(
         FLAGS.tfdata,
