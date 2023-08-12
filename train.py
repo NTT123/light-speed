@@ -6,6 +6,9 @@ from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
 import tensorflow as tf
 import torch
 from torch.nn import functional as F
@@ -13,7 +16,6 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
 
 import commons
-import utils
 from losses import discriminator_loss, feature_loss, generator_loss, kl_loss
 from mel_processing import mel_spectrogram_torch, spec_to_mel_torch
 from models import MultiPeriodDiscriminator, SynthesizerTrn
@@ -29,6 +31,8 @@ else:
     WORLD_SIZE = 1
 
 tf.config.set_visible_devices([], "GPU")
+matplotlib.use("Agg")
+
 
 parser = ArgumentParser()
 parser.add_argument("--config", type=str, default="config.json")
@@ -143,6 +147,20 @@ net_g.train()
 net_d.train()
 
 
+def plot_spectrogram_to_numpy(spectrogram):
+    fig, ax = plt.subplots(figsize=(10, 2))
+    im = ax.imshow(spectrogram, aspect="auto", origin="lower", interpolation="none")
+    plt.colorbar(im, ax=ax)
+    plt.xlabel("Frames")
+    plt.ylabel("Channels")
+    plt.tight_layout()
+    fig.canvas.draw()
+    data = np.fromstring(fig.canvas.tostring_rgb(), dtype=np.uint8, sep="")
+    data = data.reshape(fig.canvas.get_width_height()[::-1] + (3,))
+    plt.close()
+    return data
+
+
 def prepare_batch(batch):
     x = torch.from_numpy(batch["phone_idx"]).to(device, non_blocking=True).long()
     x_lengths = (
@@ -217,8 +235,8 @@ def evaluate(step):
             hps.data.mel_fmin,
             hps.data.mel_fmax,
         )
-    gen_mel = utils.plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy())
-    gt_mel = utils.plot_spectrogram_to_numpy(mel[0].cpu().numpy())
+    gen_mel = plot_spectrogram_to_numpy(y_hat_mel[0].cpu().numpy())
+    gt_mel = plot_spectrogram_to_numpy(mel[0].cpu().numpy())
     if RANK == 0:
         test_writer.add_audio(
             "gt/audio", y[0, :, : y_lengths[0]], step, hps.data.sampling_rate
