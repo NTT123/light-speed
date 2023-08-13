@@ -1,7 +1,10 @@
 # aligned-vits
-A modified VITS using aligned phoneme durations
+A modified VITS model that uses aligned phoneme durations
 
 ## FAQ
 
-Q: How to create training data?  
-A: See `./prepare_ljs_tfdata.ipynb` notebook on how to prepare the training data.
+Q: How do I create training data?  
+A: See the `./prepare_ljs_tfdata.ipynb` notebook for instructions on preparing the training data.
+
+Q: How can I train a model to predict phoneme durations?  
+A: See the `./train_duration_model.ipynb` notebook.
