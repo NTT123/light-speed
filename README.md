@@ -8,6 +8,12 @@ A modified VITS model that uses aligned phoneme durations
 Q: How do I create training data?  
 A: See the `./prepare_ljs_tfdata.ipynb` notebook for instructions on preparing the training data.
 
+Q: How can I train the VITS model with 1 GPU?  
+A: Run: `python train.py`
+
+Q: How can I train the VITS model with 4 GPUs?  
+A: Run: `torchrun --standalone --nnodes=1 --nproc-per-node=4 train.py`
+
 Q: How can I train a model to predict phoneme durations?  
 A: See the `./train_duration_model.ipynb` notebook.
 
