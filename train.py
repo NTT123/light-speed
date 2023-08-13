@@ -87,7 +87,7 @@ if RANK == 0:
 
 #### INIT MODEL ####
 net_g = SynthesizerTrn(
-    256,
+    hps.data.vocab_size,
     hps.data.filter_length // 2 + 1,
     hps.train.segment_size // hps.data.hop_length,
     **vars(hps.model),

@@ -5,6 +5,7 @@ from torch import nn
 from torch.nn import Conv1d, Conv2d, ConvTranspose1d
 from torch.nn import functional as F
 from torch.nn.utils import remove_weight_norm, spectral_norm, weight_norm
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 
 import attentions
 import commons
@@ -337,7 +338,6 @@ class SynthesizerTrn(nn.Module):
         upsample_kernel_sizes,
         n_speakers=0,
         gin_channels=0,
-        use_sdp=True,
         **kwargs
     ):
         super().__init__()
@@ -359,8 +359,6 @@ class SynthesizerTrn(nn.Module):
         self.segment_size = segment_size
         self.n_speakers = n_speakers
         self.gin_channels = gin_channels
-
-        #     self.use_sdp = use_sdp
 
         self.enc_p = TextEncoder(
             n_vocab,
@@ -445,12 +443,29 @@ class SynthesizerTrn(nn.Module):
         o = self.dec((z * y_mask)[:, :, :max_len], g=g)
         return o, attn, y_mask, (z, z_p, m_p, logs_p)
 
-    def voice_conversion(self, y, y_lengths, sid_src, sid_tgt):
-        assert self.n_speakers > 0, "n_speakers have to be larger than 0."
-        g_src = self.emb_g(sid_src).unsqueeze(-1)
-        g_tgt = self.emb_g(sid_tgt).unsqueeze(-1)
-        z, m_q, logs_q, y_mask = self.enc_q(y, y_lengths, g=g_src)
-        z_p = self.flow(z, y_mask, g=g_src)
-        z_hat = self.flow(z_p, y_mask, g=g_tgt, reverse=True)
-        o_hat = self.dec(z_hat * y_mask, g=g_tgt)
-        return o_hat, y_mask, (z, z_p, z_hat)
+
+class DurationNet(torch.nn.Module):
+    def __init__(self, vocab_size: int, dim: int, num_layers=2):
+        super().__init__()
+        self.embed = torch.nn.Embedding(vocab_size, embedding_dim=dim)
+        self.rnn = torch.nn.GRU(
+            dim,
+            dim,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=0.2,
+        )
+        self.proj = torch.nn.Linear(2 * dim, 1)
+
+    def forward(self, token, lengths):
+        x = self.embed(token)
+        lengths = lengths.long().cpu()
+        x = pack_padded_sequence(
+            x, lengths=lengths, batch_first=True, enforce_sorted=False
+        )
+        x, _ = self.rnn(x)
+        x, _ = pad_packed_sequence(x, batch_first=True, total_length=token.shape[1])
+        x = self.proj(x)
+        x = torch.nn.functional.softplus(x)
+        return x
