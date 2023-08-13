@@ -1,6 +1,8 @@
 # aligned-vits
 A modified VITS model that uses aligned phoneme durations
 
+<img src="./net.png" alt="network diagram" width="700"/>
+
 ## FAQ
 
 Q: How do I create training data?  
