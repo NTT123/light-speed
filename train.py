@@ -206,7 +206,7 @@ def prepare_batch(batch):
 
 def evaluate(step):
     net_g.eval()
-    ds = load_tfdata(FLAGS.tfdata, "test", FLAGS.batch_size, 0)
+    ds = load_tfdata(FLAGS.tfdata, "test", 1, 0)
     with torch.no_grad():
         batch = next(ds.as_numpy_iterator())
         x, x_lengths, spec, spec_lengths, y, y_lengths, attn = prepare_batch(batch)
