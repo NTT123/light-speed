@@ -195,7 +195,7 @@ def prepare_batch(batch):
     ).int()
     end_frame = (end_time * hps.data.sampling_rate / hps.data.hop_length / 1000).int()
     # make sure end_frame > start_frame, at least 1 frame
-    end_frame = torch.max(end_frame, start_frame + 1)
+    end_frame = torch.maximum(end_frame, start_frame + 1)
     pos = torch.arange(0, spec.shape[-1], device=spec.device)
     attn = torch.logical_and(
         pos[None, :, None] >= start_frame[:, None, :],
