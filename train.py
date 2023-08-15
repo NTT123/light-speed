@@ -32,6 +32,7 @@ parser.add_argument("--compile", action="store_true", default=False)
 parser.add_argument("--device", type=str, default="cuda")
 parser.add_argument("--seed", type=int, default=42)
 parser.add_argument("--ckpt-interval", type=int, default=5_000)
+parser.add_argument("--rm-old-ckpt", action="store_true", default=False)
 FLAGS = parser.parse_args()
 with open(FLAGS.config, "rb") as f:
     hps = json.load(f, object_hook=lambda x: SimpleNamespace(**x))
@@ -376,6 +377,11 @@ for epoch in range(_epoch + 1, 100_000):
                     },
                     FLAGS.ckpt_dir / f"ckpt_{step:08d}.pth",
                 )
+                all_ckpts.append(FLAGS.ckpt_dir / f"ckpt_{step:08d}.pth")
+                # keep only 10 latest checkpoints
+                if len(all_ckpts) >= 11 and FLAGS.rm_old_ckpt:
+                    all_ckpts[0].unlink()
+                    del all_ckpts[0]
     if RANK == 0:
         lr = optim_g.param_groups[0]["lr"]
         train_writer.add_scalar("lr", lr, global_step=step)
