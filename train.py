@@ -125,10 +125,10 @@ scheduler_d = torch.optim.lr_scheduler.ExponentialLR(optim_d, gamma=hps.train.lr
 
 
 #### LOAD CHECKPOINT ####
-ckpts = sorted(FLAGS.ckpt_dir.glob("ckpt_*.pth"))
-if len(ckpts) > 0:
+all_ckpts = sorted(FLAGS.ckpt_dir.glob("ckpt_*.pth"))
+if len(all_ckpts) > 0:
     # last ckpt
-    ckpt = ckpts[-1]
+    ckpt = all_ckpts[-1]
     print(f"loading checkpoint {ckpt}")
     ckpt = torch.load(ckpt, map_location=device)
     net_g.load_state_dict(ckpt["net_g"])
@@ -194,12 +194,6 @@ def prepare_batch(batch):
         start_time * hps.data.sampling_rate / hps.data.hop_length / 1000
     ).int()
     end_frame = (end_time * hps.data.sampling_rate / hps.data.hop_length / 1000).int()
-    # at least 1 frame for each token
-    empty_mask = start_frame == end_frame
-    start_frame = torch.where(empty_mask, start_frame - 1, start_frame)
-    end_frame[:, :-1] = torch.where(
-        empty_mask[:, 1:], end_frame[:, :-1] - 1, end_frame[:, :-1]
-    )
     pos = torch.arange(0, spec.shape[-1], device=spec.device)
     attn = torch.logical_and(
         pos[None, :, None] >= start_frame[:, None, :],
@@ -323,6 +317,7 @@ for epoch in range(_epoch + 1, 100_000):
         grad_norm_d = commons.clip_grad_value_(net_d.parameters(), None)
         d_scaler.step(optim_d)
         d_scaler.update()
+        optim_d.zero_grad()
 
         with ctx:
             y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
@@ -342,6 +337,7 @@ for epoch in range(_epoch + 1, 100_000):
         grad_norm_g = commons.clip_grad_value_(net_g.parameters(), None)
         g_scaler.step(optim_g)
         g_scaler.update()
+        optim_g.zero_grad()
 
         if RANK == 0:
             train_writer.add_scalar(

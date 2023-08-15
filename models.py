@@ -13,7 +13,7 @@ import modules
 from commons import get_padding, init_weights
 
 
-class TextEncoder(nn.Module):
+class PriorEncoder(nn.Module):
     def __init__(
         self,
         n_vocab,
@@ -37,25 +37,40 @@ class TextEncoder(nn.Module):
 
         self.emb = nn.Embedding(n_vocab, hidden_channels)
         nn.init.normal_(self.emb.weight, 0.0, hidden_channels**-0.5)
-
-        self.encoder = attentions.Encoder(
-            hidden_channels, filter_channels, n_heads, n_layers, kernel_size, p_dropout
+        self.pre_attn_encoder = attentions.Encoder(
+            hidden_channels,
+            filter_channels,
+            n_heads,
+            n_layers // 2,
+            kernel_size,
+            p_dropout,
+        )
+        self.post_attn_encoder = attentions.Encoder(
+            hidden_channels,
+            filter_channels,
+            n_heads,
+            n_layers - n_layers // 2,
+            kernel_size,
+            p_dropout,
         )
         self.proj = nn.Conv1d(hidden_channels, out_channels * 2, 1)
 
-    def forward(self, x, y_lengths, attn):
+    def forward(self, x, x_lengths, y_lengths, attn):
         x = self.emb(x) * math.sqrt(self.hidden_channels)  # [b, t, h]
-        x = torch.einsum("bth,blt->blh", x, attn)
-        x = torch.transpose(x, 1, -1)  # [b, h, l]
-        x_mask = torch.unsqueeze(commons.sequence_mask(y_lengths, x.size(2)), 1).to(
+        x = torch.transpose(x, 1, -1)  # [b, h, t]
+        x_mask = torch.unsqueeze(commons.sequence_mask(x_lengths, x.size(2)), 1).to(
             x.dtype
         )
-
-        x = self.encoder(x * x_mask, x_mask)
-        stats = self.proj(x) * x_mask
+        x = self.pre_attn_encoder(x * x_mask, x_mask)
+        y = torch.einsum("bht,blt->bhl", x, attn)
+        y_mask = torch.unsqueeze(commons.sequence_mask(y_lengths, y.size(2)), 1).to(
+            y.dtype
+        )
+        y = self.post_attn_encoder(y * y_mask, y_mask)
+        stats = self.proj(y) * y_mask
 
         m, logs = torch.split(stats, self.out_channels, dim=1)
-        return x, m, logs, x_mask
+        return y, m, logs, y_mask
 
 
 class PosteriorEncoder(nn.Module):
@@ -360,7 +375,7 @@ class SynthesizerTrn(nn.Module):
         self.n_speakers = n_speakers
         self.gin_channels = gin_channels
 
-        self.enc_p = TextEncoder(
+        self.enc_p = PriorEncoder(
             n_vocab,
             inter_channels,
             hidden_channels,
@@ -394,8 +409,7 @@ class SynthesizerTrn(nn.Module):
             self.emb_g = nn.Embedding(n_speakers, gin_channels)
 
     def forward(self, x, x_lengths, attn, y, y_lengths, sid=None):
-        del x_lengths
-        x, m_p, logs_p, x_mask = self.enc_p(x, y_lengths, attn=attn)
+        x, m_p, logs_p, x_mask = self.enc_p(x, x_lengths, y_lengths, attn=attn)
         if self.n_speakers > 0:
             g = self.emb_g(sid).unsqueeze(-1)  # [b, h, 1]
         else:
@@ -428,8 +442,7 @@ class SynthesizerTrn(nn.Module):
         noise_scale=1,
         max_len=None,
     ):
-        del x_lengths
-        x, m_p, logs_p, x_mask = self.enc_p(x, y_lengths, attn=attn)
+        x, m_p, logs_p, x_mask = self.enc_p(x, x_lengths, y_lengths, attn=attn)
         if self.n_speakers > 0:
             g = self.emb_g(sid).unsqueeze(-1)  # [b, h, 1]
         else:
