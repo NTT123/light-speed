@@ -324,7 +324,7 @@ for epoch in range(_epoch + 1, 100_000):
             y_d_hat_r, y_d_hat_g, fmap_r, fmap_g = net_d(y, y_hat)
 
         loss_mel = F.l1_loss(y_mel, y_hat_mel)
-        loss_kl = kl_loss(m_q, logs_q, m_p, logs_p, z_mask)
+        loss_kl = kl_loss(z_p, logs_q, m_p, logs_p, z_mask)
 
         loss_fm = feature_loss(fmap_r, fmap_g)
         loss_gen, losses_gen = generator_loss(y_d_hat_g)
