@@ -11,6 +11,7 @@ import attentions
 import commons
 import modules
 from commons import get_padding, init_weights
+from flow import ResidualCouplingBlock
 
 
 class PriorEncoder(nn.Module):
@@ -404,6 +405,9 @@ class SynthesizerTrn(nn.Module):
             16,
             gin_channels=gin_channels,
         )
+        self.flow = ResidualCouplingBlock(
+            inter_channels, hidden_channels, 5, 2, 4, gin_channels=gin_channels
+        )
 
         if n_speakers > 1:
             self.emb_g = nn.Embedding(n_speakers, gin_channels)
@@ -416,7 +420,8 @@ class SynthesizerTrn(nn.Module):
             g = None
 
         z, m_q, logs_q, y_mask = self.enc_q(y, y_lengths, g=g)
-        z_p = z
+        z_p = self.flow(z, y_mask, g=g)
+
         z_slice, ids_slice = commons.rand_slice_segments(
             z, y_lengths, self.segment_size
         )
@@ -452,7 +457,7 @@ class SynthesizerTrn(nn.Module):
             x_mask.dtype
         )
         z_p = m_p + torch.randn_like(m_p) * torch.exp(logs_p) * noise_scale
-        z = z_p
+        z = self.flow(z_p, y_mask, g=g, reverse=True)
         o = self.dec((z * y_mask)[:, :, :max_len], g=g)
         return o, attn, y_mask, (z, z_p, m_p, logs_p)
 
