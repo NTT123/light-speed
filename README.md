@@ -1,7 +1,10 @@
 # Light Speed ⚡
-Light Speed ⚡ is a modified VITS model that uses aligned phoneme durations.
 
-![network diagram](net.svg)
+Light Speed ⚡ is an open-source text-to-speech model based on VITS, with some modifications:
+- utilizes phoneme duration's ground truth, obtained from an external forced aligner (such as Montreal Forced Aligner), to upsample phoneme information to frame-level information. The result is a more robust model, with a slight trade-off in speech quality.
+- employs dilated convolution to expand the Wavenet Flow module's receptive field, enhancing its ability to capture long-range interactions.
+
+<!-- ![network diagram](net.svg) -->
 
 ## FAQ
 
