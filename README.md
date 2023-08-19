@@ -19,3 +19,8 @@ A: See the `./train_duration_model.ipynb` notebook.
 
 Q: How can I generate speech with a trained model?  
 A: See the `./inference.ipynb` notebook.
+
+
+## Credits
+
+- Most of the code in this repository is based on the [VITS official repository](https://github.com/jaywalnut310/vits).
