@@ -6,6 +6,12 @@ Light Speed ⚡ is an open-source text-to-speech model based on VITS, with some 
 
 <!-- ![network diagram](net.svg) -->
 
+## Pretrained models and demos
+
+We provide two pretrained models and demos:
+- VN - Male voice: https://huggingface.co/spaces/ntt123/Vietnam-male-voice-TTS
+- VN - Female voice: https://huggingface.co/spaces/ntt123/Vietnam-female-voice-TTS
+
 ## FAQ
 
 Q: How do I create training data?  
